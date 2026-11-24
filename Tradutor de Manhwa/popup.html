@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="ui.css">
+  <style>
+    body { width: 300px; padding: 14px; }
+    h1 { font-size: 16px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+    h1 img { width: 22px; height: 22px; }
+    button { width: 100%; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+    kbd { font: 600 11px system-ui, sans-serif; opacity: .65; }
+    .switch { display: flex; gap: 8px; align-items: center; margin: 10px 0; font-size: 13px; cursor: pointer; }
+    .row { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; font-size: 12px; }
+    .power { justify-content: center; font-size: 14px; padding: 11px; margin-bottom: 12px; }
+    .power.on { background: #15803d; border-color: #15803d; color: #fff; }
+    .power.on:hover { background: #166534; }
+    .power.off { background: #52525b; border-color: #52525b; color: #fff; }
+    .power.off:hover { background: #3f3f46; }
+    #offMsg { margin: -4px 0 10px; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1><img src="icons/icon48.png" alt="">Tradutor de Manhwa</h1>
+
+  <button id="power" class="power" type="button"></button>
+  <div id="offMsg" class="muted" hidden>Desligado: a extensão não faz nada em nenhum site. Ligue quando for ler.</div>
+
+  <div id="nokey" class="warn" hidden>
+    Falta colocar sua chave. <a href="#" id="openOpt2">Configurar agora</a>
+  </div>
+  <div id="nopage" class="warn" hidden>Abra um site de manhwa para usar a extensão.</div>
+
+  <div id="controls">
+    <button id="all" class="primary">Traduzir capítulo</button>
+    <button id="screen">Traduzir o que está na tela <kbd>Alt+T</kbd></button>
+    <button id="toggle">Mostrar original / tradução <kbd>Alt+O</kbd></button>
+    <label class="switch"><input type="checkbox" id="auto"> Traduzir sozinho sempre neste site</label>
+    <button id="compare">🔬 Comparar tradutores nesta tela</button>
+    <button id="clear" class="ghost">Apagar as traduções desta página</button>
+  </div>
+
+  <div id="status" class="muted"></div>
+  <div class="row">
+    <span id="stats" class="muted"></span>
+    <a href="#" id="openOpt">Configurações</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

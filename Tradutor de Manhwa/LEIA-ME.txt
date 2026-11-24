@@ -1,0 +1,56 @@
+TRADUTOR DE MANHWA (CLAUDE) — COMO INSTALAR
+===========================================
+
+1. No Chrome, abra o endereço:  chrome://extensions
+2. Ligue o "Modo do desenvolvedor" (botão no canto superior direito).
+3. Clique em "Carregar sem compactação" e escolha ESTA pasta
+   ("Tradutor de Manhwa", a que tem o arquivo manifest.json).
+4. Clique no ícone de quebra-cabeça do Chrome e fixe o "Tradutor de Manhwa"
+   para o ícone ficar sempre visível.
+5. A página de configurações abre sozinha. Escolha a IA, cole a chave e
+   clique em "Salvar e testar". (Se não abrir: clique com o botão direito
+   no ícone da extensão > Opções.)
+
+CHAVE GRÁTIS DO GEMINI (padrão)
+-------------------------------
+- Entre em aistudio.google.com/apikey com sua conta do Google.
+- Clique em "Create API key", copie (começa com AIza) e cole na extensão.
+- É grátis e não pede cartão, mas tem limite de uso por dia.
+
+MODO GOOGLE TRADUTOR (grátis e sem limite)
+------------------------------------------
+- Nas configurações, escolha "Google Tradutor".
+- Clique em "Baixar o leitor de texto". Se o Chrome perguntar, clique em
+  "Manter" em cada arquivo.
+- Mova a pasta "tesseract" que apareceu em Downloads para dentro desta
+  pasta (onde está o manifest).
+- Recarregue a extensão em chrome://extensions e clique em "Verificar de novo".
+
+MODO GEMINI NANO (grátis, sem limite, roda no PC)
+------------------------------------------------
+- Nas configurações, escolha "Gemini Nano" e clique em "Baixar o Gemini Nano".
+- O Chrome baixa alguns GB e precisa de uns 22 GB livres no disco.
+- Para comparar os tradutores: ícone da extensão > "Comparar tradutores nesta tela".
+
+CHAVE DO CLAUDE (paga, opcional)
+--------------------------------
+- Entre em console.anthropic.com e crie uma conta.
+- Em "Billing", coloque crédito (é separado da assinatura do Claude).
+- Em "API Keys", clique em "Create Key", copie e cole na extensão.
+
+Não mande nenhuma chave para ninguém.
+
+COMO USAR
+---------
+- Passe o mouse numa página do manhwa e clique em "Traduzir".
+- Ou clique no ícone da extensão > "Traduzir capítulo".
+- Marque "Traduzir sozinho sempre neste site" para não precisar clicar.
+- Alt+T: traduz o que está na tela (use quando o site bloquear as imagens).
+- Alt+O: alterna entre original e tradução.
+- Clicar num balão traduzido mostra o original dele.
+
+IMPORTANTE
+----------
+- Não apague nem mova esta pasta: o Chrome usa a extensão direto daqui.
+- Se você mexer nos arquivos, clique no botão de recarregar (seta
+  circular) da extensão em chrome://extensions e dê F5 na página do manhwa.

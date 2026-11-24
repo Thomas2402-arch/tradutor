@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Configurações · Tradutor de Manhwa</title>
+  <link rel="stylesheet" href="ui.css">
+  <style>
+    main { max-width: 620px; margin: 32px auto; padding: 0 20px 40px; }
+    h1 { font-size: 22px; display: flex; align-items: center; gap: 10px; margin: 0 0 6px; }
+    h1 img { width: 32px; height: 32px; }
+    h2 { font-size: 15px; margin: 28px 0 8px; }
+    label { display: block; font-weight: 600; margin: 16px 0 6px; }
+    .inline { display: flex; gap: 8px; }
+    .inline input { flex: 1; }
+    ol { padding-left: 20px; margin: 6px 0; }
+    li { margin: 4px 0; }
+    .check { display: flex; gap: 8px; align-items: center; font-weight: 500; }
+    .save { margin-top: 22px; display: flex; gap: 12px; align-items: center; }
+    .card { border: 1px solid #e4e4e7; border-radius: 10px; padding: 12px 16px; margin-top: 10px; }
+    .choice { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 640px) { .choice { grid-template-columns: 1fr; } }
+    .choice label { margin: 0; font-weight: 500; border: 2px solid #e4e4e7; border-radius: 10px; padding: 12px; cursor: pointer; }
+    .choice label:has(input:checked) { border-color: #1d4ed8; background: rgba(29,78,216,.06); }
+    .choice b { display: block; margin-bottom: 2px; }
+    @media (prefers-color-scheme: dark) {
+      .card, .choice label { border-color: #3f3f46; }
+      .choice label:has(input:checked) { border-color: #60a5fa; background: rgba(96,165,250,.1); }
+    }
+    kbd { font: 600 12px system-ui, sans-serif; padding: 1px 6px; border: 1px solid #ccc; border-radius: 4px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1><img src="icons/icon128.png" alt="">Tradutor de Manhwa</h1>
+  <p class="muted">Traduz os balões para português usando inteligência artificial.</p>
+
+  <h2>1. Qual IA vai traduzir</h2>
+  <div class="choice">
+    <label><input type="radio" name="provider" value="google"> <b>Google Tradutor · grátis e sem limite</b>
+      <span class="muted">Lê o texto no seu PC e traduz com o Google Tradutor. Tradução mais "robótica" e erra mais em letras estilizadas e efeitos sonoros.</span></label>
+    <label><input type="radio" name="provider" value="nano"> <b>Gemini Nano · no seu PC</b>
+      <span class="muted">IA do próprio Chrome que "olha" cada balão. Grátis e sem limite. Precisa baixar uma vez (alguns GB) e é mais lenta.</span></label>
+    <label><input type="radio" name="provider" value="gemini"> <b>Gemini (Google) · grátis</b>
+      <span class="muted">Tem limite de uso por dia. O Google pode usar as imagens para melhorar os produtos dele.</span></label>
+    <label><input type="radio" name="provider" value="claude"> <b>Claude · pago</b>
+      <span class="muted">Uns US$ 0,025 por capítulo. Sem limite diário.</span></label>
+  </div>
+
+  <section id="sec-nano">
+    <h2>2. Baixar o Gemini Nano (só uma vez)</h2>
+    <div class="card">
+      <p><b>Gemini Nano:</b> <span id="nanoStatus">verificando…</span></p>
+      <p id="nanoRow" hidden><button id="nanoDownload" type="button">Baixar o Gemini Nano</button>
+        <span class="muted">O Chrome baixa a IA (alguns GB) e precisa de uns 22 GB livres no disco. Pode demorar; deixe esta aba aberta.</span></p>
+      <p class="muted">Ele lê os balões. Para ler também narração e texto fora de balão, instale o leitor de texto abaixo (opcional).</p>
+    </div>
+  </section>
+
+  <section id="sec-google">
+    <h2>2. Instalar o leitor de texto (só uma vez)</h2>
+    <div class="card">
+      <p><b>Leitor de texto:</b> <span id="ocrStatus">verificando…</span></p>
+      <ol id="ocrSteps" hidden>
+        <li>Clique em <button id="ocrDownload" type="button">Baixar o leitor de texto</button> <span class="muted">(5 arquivos, uns 10 MB)</span></li>
+        <li>Abra a pasta <b>Downloads</b> do seu PC. Lá vai ter uma pasta chamada <b>tesseract</b>.</li>
+        <li>Arraste a pasta <b>tesseract</b> para <b>dentro da pasta da extensão</b>, a mesma onde está o arquivo <i>manifest</i>.</li>
+        <li>Em <code>chrome://extensions</code>, clique na setinha de recarregar do Tradutor de Manhwa e depois em <button id="ocrRecheck" type="button">Verificar de novo</button></li>
+      </ol>
+      <p class="muted">Dica: se alguma página ficar ruim, passe o mouse em cima dela e clique em <b>✨ Refazer com Gemini</b> (precisa da chave grátis do Gemini salva aqui nas configurações).</p>
+      <p><b>Tradutor do Google no PC:</b> <span id="mtStatus">verificando…</span></p>
+      <p id="mtRow" hidden><button id="mtDownload" type="button">Baixar o tradutor (inglês → português)</button>
+        <span class="muted">Fica salvo no Chrome. Sem ele, a extensão usa o Google Tradutor pela internet, que também é grátis.</span></p>
+    </div>
+  </section>
+
+  <section id="sec-gemini">
+    <h2>2. Sua chave do Gemini (grátis)</h2>
+    <div class="card">
+      <ol>
+        <li>Entre em <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a> com sua conta do Google e aceite os termos.</li>
+        <li>Clique em <b>Create API key</b> (Criar chave de API). Se pedir um projeto, deixe o que ele sugerir.</li>
+        <li>Copie a chave (começa com <code>AIza</code>) e cole aqui embaixo. Não precisa cadastrar cartão.</li>
+      </ol>
+      <p class="muted">A chave fica guardada só neste navegador. Não mande ela para ninguém.</p>
+    </div>
+    <label for="geminiKey">Chave do Gemini</label>
+    <div class="inline">
+      <input type="password" id="geminiKey" placeholder="AIza..." autocomplete="off" spellcheck="false">
+      <button class="show" data-for="geminiKey" type="button">Mostrar</button>
+    </div>
+    <label for="geminiModel">Modelo</label>
+    <select id="geminiModel">
+      <option value="gemini-3.6-flash">Gemini 3.6 Flash · melhor tradução (recomendado)</option>
+      <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite · mais rápido, tradução mais simples</option>
+      <option value="gemini-flash-latest">Gemini Flash (sempre o mais novo)</option>
+    </select>
+    <p class="muted">Se acabar o limite de hoje com um modelo, tente o outro: cada modelo tem o seu limite.</p>
+  </section>
+
+  <section id="sec-claude">
+    <h2>2. Sua chave da API do Claude (paga)</h2>
+    <div class="card">
+      <ol>
+        <li>Entre em <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a> e crie uma conta (dá para entrar com o Google).</li>
+        <li>Em <b>Billing</b>, coloque crédito no cartão. Com o modelo Haiku, US$ 5 dão para uns 190 capítulos.</li>
+        <li>Em <b>API Keys</b>, clique em <b>Create Key</b>, copie a chave (começa com <code>sk-ant-</code>) e cole aqui embaixo.</li>
+      </ol>
+      <p class="muted">A chave fica guardada só neste navegador. Não mande ela para ninguém.</p>
+    </div>
+    <label for="apiKey">Chave da API do Claude</label>
+    <div class="inline">
+      <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+      <button class="show" data-for="apiKey" type="button">Mostrar</button>
+    </div>
+    <label for="model">Modelo</label>
+    <select id="model">
+      <option value="claude-haiku-5-5">Haiku 5.5 · barato e rápido (recomendado)</option>
+      <option value="claude-sonnet-5-5">Sonnet 5.5 · tradução mais caprichada, ~20× mais caro</option>
+      <option value="claude-opus-5-5">Opus 5.5 · o melhor, ~40× mais caro</option>
+    </select>
+    <p class="muted" id="costHint"></p>
+  </section>
+
+  <label for="customModel">Outro modelo (opcional, para quem sabe o nome exato)</label>
+  <input type="text" id="customModel" placeholder="deixe vazio para usar o de cima" spellcheck="false">
+
+  <h2>3. Idioma</h2>
+  <label for="targetLang">Traduzir para</label>
+  <input type="text" id="targetLang">
+
+  <h2>4. Velocidade e memória</h2>
+  <label class="check"><input type="checkbox" id="prefetchNext"> Já ir traduzindo o próximo capítulo enquanto eu leio (abre pronto, mas gasta o dobro do limite)</label>
+  <label class="check"><input type="checkbox" id="reviewPass"> Modo Google: depois de traduzir, revisar o capítulo procurando balões que faltaram</label>
+  <label class="check"><input type="checkbox" id="useMemory"> Memória da série: lembrar nomes, termos e frases já traduzidos para traduzir sempre igual</label>
+  <label class="check"><input type="checkbox" id="useCache"> Guardar as traduções (se abrir o mesmo capítulo de novo, aparece na hora e não gasta de novo)</label>
+  <p>
+    <button id="clearCache" type="button" class="ghost">Apagar traduções guardadas</button>
+    <button id="clearMemory" type="button" class="ghost">Apagar memória das séries</button>
+    <span id="cacheMsg" class="muted"></span>
+  </p>
+
+  <div class="save">
+    <button id="save" class="primary" type="button">Salvar e testar</button>
+    <span id="msg"></span>
+  </div>
+
+  <h2>Como usar</h2>
+  <div class="card">
+    <ul>
+      <li>Passe o mouse em cima de qualquer página do manhwa e clique em <b>🇧🇷 Traduzir capítulo</b> (ou use o botão do ícone da extensão). Um clique traduz o capítulo inteiro, começando pela página que você está lendo.</li>
+      <li>Marque <b>Traduzir sozinho sempre neste site</b> no ícone da extensão para não precisar clicar.</li>
+      <li>Se o site bloquear as imagens, aperte <kbd>Alt</kbd>+<kbd>T</kbd> para traduzir o que está na tela.</li>
+      <li><kbd>Alt</kbd>+<kbd>O</kbd> alterna entre original e tradução. Clicar num balão mostra o original dele.</li>
+    </ul>
+    <p class="muted">Para mudar os atalhos: <code>chrome://extensions/shortcuts</code></p>
+  </div>
+</main>
+<script src="options.js"></script>
+</body>
+</html>
