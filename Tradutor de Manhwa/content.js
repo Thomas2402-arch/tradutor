@@ -20,12 +20,24 @@
   let provider = 'gemini';
   let hasGemini = false;
   let hasClaude = false;
-  const isLocal = p => p === 'google' || p === 'nano';
+  const isLocal = p => p === 'google' || p === 'nano' || p === 'local';
+  // modo "No seu PC": o llama.cpp lê o texto; quem traduz é escolhido (llama/gemini/claude/google)
+  let localTranslator = 'llama';
+  const LOCAL_CROP = 512;   // lado maior do recorte mandado ao modelo (menor = mais rápido)
   const cacheKeyFor = (src, mode) => (src && /^https?:/i.test(src)) ? `${mode}|${src}` : null;
-  chrome.storage.local.get({ provider: 'gemini', geminiKey: '', apiKey: '' })
-    .then(r => { provider = r.provider; hasGemini = !!r.geminiKey; hasClaude = !!r.apiKey; }).catch(() => {});
+  let srcLang = 'en', dstLang = 'pt-BR';   // idiomas de entrada e saída (códigos de LANGS, lib.js)
+  chrome.storage.local.get({ provider: 'gemini', geminiKey: '', apiKey: '', srcLang: 'en', dstLang: null, targetLang: '', localTranslator: 'llama' })
+    .then(r => {
+      localTranslator = r.localTranslator;
+      provider = r.provider; hasGemini = !!r.geminiKey; hasClaude = !!r.apiKey;
+      srcLang = LANGS[r.srcLang] ? r.srcLang : 'en';
+      dstLang = r.dstLang || migrateTargetLang(r.targetLang);
+    }).catch(() => {});
   chrome.storage.onChanged.addListener(ch => {
+    if (ch.srcLang) { srcLang = ch.srcLang.newValue || 'en'; mtTranslator = null; mtTried = false; }
+    if (ch.dstLang) { dstLang = ch.dstLang.newValue || 'pt-BR'; mtTranslator = null; mtTried = false; }
     if (ch.provider) provider = ch.provider.newValue;
+    if (ch.localTranslator) localTranslator = ch.localTranslator.newValue || 'llama';
     if (ch.geminiKey) hasGemini = !!ch.geminiKey.newValue;
     if (ch.apiKey) hasClaude = !!ch.apiKey.newValue;
   });
@@ -47,6 +59,7 @@
     }
     .box span { display: block; max-width: 100%; overflow-wrap: break-word; hyphens: auto; white-space: pre-line; }
     .box.narration { background: #fffbe6; border-radius: 4px; font-weight: 600; }
+    .box.fit { box-shadow: none; border-radius: 6px; padding: 0 2px; }
     .box.sign { background: #f5f5f5; border-radius: 4px; font-weight: 600; }
     .box.sfx { background: rgba(255,255,255,.82); color: #b00020; font-style: italic; border-radius: 8px; }
     .box.grow { overflow: visible; z-index: 1; }
@@ -70,6 +83,12 @@
     .cmp li { margin: 4px 0; }
     .cmp .orig { display: block; color: #777; font-size: 12px; }
     .cmp .wait { color: #666; font-style: italic; }
+    .cmp.wide { width: min(600px, calc(100vw - 32px)); }
+    .cmp .sum div { margin: 2px 0; }
+    .cmp .sum small { color: #666; }
+    .cmp .bub img { display: block; max-width: 100%; max-height: 140px; margin: 0 auto 6px; border: 1px solid #e4e4e7; border-radius: 6px; }
+    .cmp .bub ol { list-style: none; padding: 0; }
+    .cmp .bub .tr { display: block; color: #1d4ed8; font-size: 13px; }
     .hoverbtn {
       position: fixed; display: none; pointer-events: auto; background: #111; color: #fff; border: 0;
       border-radius: 999px; padding: 7px 13px; font: 600 13px/1 system-ui, "Segoe UI", sans-serif;
@@ -149,7 +168,7 @@
     if (autoOn) stopAuto();
     if (Date.now() - fatalShownAt > 8000) {
       fatalShownAt = Date.now();
-      const needsOptions = ['NO_KEY', 'AUTH', 'MODEL', 'NO_NANO'].includes(res.code);
+      const needsOptions = ['NO_KEY', 'AUTH', 'MODEL', 'NO_NANO', 'NO_HOST', 'NOT_INSTALLED', 'NO_VCRUNTIME', 'START_FAILED', 'VULKAN_OLD', 'LOCAL_TIMEOUT', 'LOCAL_OFF'].includes(res.code);
       const action = (needsOptions || res.code === 'NO_OCR') ? { label: 'Abrir configurações', fn: () => send({ type: 'openOptions' }) } : null;
       toast('⚠ ' + res.error, res.code === 'NO_OCR' ? 30000 : 12000, action);
     }
@@ -197,14 +216,16 @@
       const x = Math.max(0, b.x - px), y = Math.max(0, b.y - py);
       const w = Math.min(1 - x, b.w + 2 * px), h = Math.min(1 - y, b.h + 2 * py);
       const el = document.createElement('div');
-      el.className = 'box ' + (b.kind || 'dialogue');
+      el.className = 'box ' + (b.kind || 'dialogue') + (b.bg ? ' fit' : '');
+      if (b.bg) el.style.background = b.bg;
+      if (b.caps) el.style.textTransform = 'uppercase';
       el.style.left = x * 100 + '%';
       el.style.top = y * 100 + '%';
       el.style.width = w * 100 + '%';
       el.style.height = h * 100 + '%';
       el.dataset.h = h * 100 + '%';
       const span = document.createElement('span');
-      span.lang = 'pt-BR';
+      span.lang = dstLang;
       span.textContent = b.text;
       el.appendChild(span);
       el.title = (b.original ? 'Original: ' + b.original + '\n' : '') + '(clique para ver o original)';
@@ -402,12 +423,14 @@
   // Tradutor do Google embutido no Chrome (roda no PC, grátis, sem limite).
   // Na primeira vez ele precisa baixar o idioma, e isso só pode começar depois de um clique.
   function prepareTranslator() {
-    if (mtTranslator || mtTried || !('Translator' in self)) return;
+    // "detectar sozinho": o tradutor do Chrome precisa saber o idioma; usa o Google pela internet
+    if (mtTranslator || mtTried || !('Translator' in self) || srcLang === 'auto') return;
     mtTried = true;
-    Translator.availability({ sourceLanguage: 'en', targetLanguage: 'pt' }).then(a => {
+    const pair = { sourceLanguage: langMt(srcLang), targetLanguage: langMt(dstLang) };
+    Translator.availability(pair).then(a => {
       if (a === 'unavailable') return;
       if (a !== 'available') toast('Baixando o tradutor do Google para o seu PC (só na primeira vez)…', 6000);
-      return Translator.create({ sourceLanguage: 'en', targetLanguage: 'pt' }).then(t => { mtTranslator = t; });
+      return Translator.create(pair).then(t => { mtTranslator = t; });
     }).catch(() => { mtTried = false; });
   }
 
@@ -416,7 +439,7 @@
     if (mtTranslator) {
       try { return await Promise.all(texts.map(t => mtTranslator.translate(t))); } catch (_) { mtTranslator = null; }
     }
-    const r = await send({ type: 'googleTranslate', texts, to: 'pt' });
+    const r = await send({ type: 'googleTranslate', texts });
     if (!r.ok) throw Object.assign(new Error(r.error), { code: r.code });
     return r.texts;
   }
@@ -479,44 +502,15 @@
   // Gemini Nano: acha os balões, recorta cada um e a IA do Chrome "olha" e lê o texto.
   // Texto fora de balão: usa o leitor de texto (se estiver instalado).
   async function nanoChunk(canvas, W, H) {
-    const k = Math.min(1, 240 / W);
-    const sw = Math.max(1, Math.round(W * k)), sh = Math.max(1, Math.round(H * k));
-    const small = new OffscreenCanvas(sw, sh);
-    const sctx = small.getContext('2d', { willReadFrequently: true });
-    sctx.drawImage(canvas, 0, 0, sw, sh);
-    const px = sctx.getImageData(0, 0, sw, sh).data;
-    const gray = new Uint8Array(sw * sh);
-    for (let i = 0; i < gray.length; i++) gray[i] = (px[i * 4] * 0.299 + px[i * 4 + 1] * 0.587 + px[i * 4 + 2] * 0.114) | 0;
-    const { boxes: blobs, label } = findBubbles(gray, sw, sh, { white: 200, max: 20 });
-
     const out = [];
-    for (const b of blobs) {
-      const msk = bubbleOutsideMask(label, sw, sh, b);
-      const x = Math.floor(msk.x0 / k), y = Math.floor(msk.y0 / k);
-      const w = Math.min(W - x, Math.ceil(msk.mw / k)), h = Math.min(H - y, Math.ceil(msk.mh / k));
-      if (w < 30 || h < 18) continue;
-      const up = Math.min(2, 768 / w, 768 / h);
-      const cw = Math.max(1, Math.round(w * up)), chh = Math.max(1, Math.round(h * up));
-      const crop = new OffscreenCanvas(cw, chh);
-      const cctx = crop.getContext('2d', { willReadFrequently: true });
-      cctx.imageSmoothingQuality = 'high';
-      cctx.drawImage(canvas, x, y, w, h, 0, 0, cw, chh);
-      const id = cctx.getImageData(0, 0, cw, chh);
-      const d = id.data;
-      for (let cy = 0; cy < chh; cy++) {
-        const my = Math.min(msk.mh - 1, Math.max(0, Math.floor((y + cy / up) * k) - msk.y0));
-        for (let cx = 0; cx < cw; cx++) {
-          const mx = Math.min(msk.mw - 1, Math.max(0, Math.floor((x + cx / up) * k) - msk.x0));
-          if (msk.outside[my * msk.mw + mx]) { const i = (cy * cw + cx) * 4; d[i] = d[i + 1] = d[i + 2] = 255; }
-        }
-      }
-      cctx.putImageData(id, 0, 0);
-      const r = await send({ type: 'nanoRead', image: await blobToDataUrl(await crop.convertToBlob({ type: 'image/png' })) });
+    for (const c of await bubbleCrops(canvas, W, H, 20)) {
+      if (!c.text) continue;   // balão claro sem nenhuma letra
+      const r = await send({ type: 'nanoRead', image: await blobToDataUrl(c.blob) });
       if (!r.ok) return r;
       const text = String(r.text || '').replace(/^["“'`]+|["”'`]+$/g, '').replace(/\s+/g, ' ').trim();
-      if (!text || /^none\b/i.test(text) || !looksLikeSpeech(text)) continue;
-      // a tradução vai no miolo do balão (onde fica o texto)
-      out.push({ x: x + w * 0.1, y: y + h * 0.14, w: w * 0.8, h: h * 0.72, original: text });
+      if (!text || /^none\b/i.test(text) || (isLatin(srcLang) && !looksLikeSpeech(text))) continue;
+      // a tradução vai só em cima do texto original, com a cor do balão
+      out.push({ ...placeTranslation(c.text, c), original: text, bg: c.bg || undefined, caps: isAllCaps(text) });
     }
 
     // texto fora de balão (narração, placas): leitor de texto, se instalado
@@ -524,7 +518,7 @@
     if (st.ok && st.installed) {
       const whole = await send({ type: 'ocr', image: await blobToDataUrl(await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })) });
       if (whole.ok) {
-        for (const g of cleanGroups(whole.lines, 65)) {
+        for (const g of cleanGroups(whole.lines, 65, ocrOptsFor(srcLang))) {
           if (!out.some(o => overlapRatio(o, g) > 0.2)) out.push(g);
         }
       }
@@ -532,13 +526,46 @@
     return out;
   }
 
+  // Modo "No seu PC": acha os balões, recorta cada um e o llama.cpp lê o texto.
+  // A tradução é feita depois, para a fatia inteira.
+  async function localChunk(canvas, W, H) {
+    const crops = await bubbleCrops(canvas, W, H, 25, LOCAL_CROP);
+    const latin = isLatin(srcLang);
+    const out = [];
+    for (const c of crops) {
+      if (!c.text) continue;   // balão claro sem nenhuma letra: não gasta uma leitura do modelo
+      const r = await send({ type: 'ocrCrop', engine: 'llama', image: await blobToDataUrl(c.blob) });
+      if (!r.ok) return r;
+      const text = String(r.text || '').replace(/\s+/g, ' ').trim();
+      if (!text || !isTexty(text, latin) || (latin && !looksLikeSpeech(text))) continue;
+      // a tradução vai só em cima do texto original, com a cor do balão
+      out.push({ ...placeTranslation(c.text, c), original: text, bg: c.bg || undefined, caps: isAllCaps(text) });
+    }
+    return out;
+  }
+
+  // Tradução das falas lidas: Google no próprio Chrome, ou o background
+  // (llama.cpp no PC, Gemini ou Claude), que também usa a memória da série.
+  async function translateLines(texts, m, pageUrl) {
+    if (!texts.length) return [];
+    if (m !== 'local' || localTranslator === 'google') return machineTranslate(texts.map(tidyCaps));
+    const r = await send({ type: 'translateTexts', texts: texts.map(tidyCaps), translator: localTranslator, pageUrl: pageUrl || location.href, context: contextLines.slice(-15) });
+    if (!r.ok) throw Object.assign(new Error(r.error), { code: r.code, fatal: r.fatal });
+    return r.texts;
+  }
+
   async function localTranslate({ src, dataUrl, pageUrl, crop, mode }, onPartial) {
     const m = mode || provider;
     try {
-      const key = cacheKeyFor(src, m);
+      const key = cacheKeyFor(src, m === 'local' ? `local2:${localTranslator}` : m   /* local2: tradução melhorada, não reaproveita o cache antigo */);
       if (key) {
         const c = await send({ type: 'cacheGet', key });
         if (c.ok && c.boxes) return { ok: true, boxes: c.boxes, cached: true, revised: c.revised };
+      }
+      if (m === 'local') {
+        // liga os servidores que faltam (o modelo leva alguns segundos para carregar)
+        const r = await send({ type: 'localEnsure', engines: ['llama'] });
+        if (!r.ok) return r;
       }
       if (!dataUrl) {
         const r = await send({ type: 'fetchImageData', src, pageUrl: pageUrl || location.href });
@@ -567,13 +594,16 @@
         if (m === 'nano') {
           groups = await nanoChunk(canvas, outW, outH);
           if (!Array.isArray(groups)) { bmp.close(); return groups; } // erro
+        } else if (m === 'local') {
+          groups = await localChunk(canvas, outW, outH);
+          if (!Array.isArray(groups)) { bmp.close(); return groups; } // erro
         } else {
           const lines = await ocrChunk(canvas, outW, outH);
           if (!Array.isArray(lines)) { bmp.close(); return lines; } // erro
-          groups = cleanGroups(lines, 50);
+          groups = cleanGroups(lines, 50, ocrOptsFor(srcLang));
         }
-        const trs = await machineTranslate(groups.map(g => tidyCaps(g.original)));
-        const bubbles = groups.map((g, k) => ({ x: g.x, y: g.y, w: g.w, h: g.h, original: g.original, translation: trs[k], kind: 'dialogue' }));
+        const trs = await translateLines(groups.map(g => g.original), m, pageUrl);
+        const bubbles = groups.map((g, k) => ({ x: g.x, y: g.y, w: g.w, h: g.h, original: g.original, translation: trs[k], kind: 'dialogue', bg: g.bg, caps: g.caps }));
         for (const box of chunkBoxesToRegion(bubbles, ch, outW, outH)) items.push({ box, chunkIndex: i });
         if (onPartial && chunks.length > 1 && i < chunks.length - 1) {
           onPartial(toFractions(dedupeAcrossChunks(items, chunks.slice(0, i + 1)), region.w, region.h), i + 1, chunks.length);
@@ -585,7 +615,8 @@
       if (key) await send({ type: 'cachePut', key, boxes, revised: false });
       return { ok: true, boxes, revised: false };
     } catch (e) {
-      return { ok: false, code: e.code || 'LOCAL', error: `O modo ${m === 'nano' ? 'Gemini Nano' : 'Google'} falhou nesta página: ` + (e.message || e) };
+      const name = { nano: 'Gemini Nano', local: 'No seu PC' }[m] || 'Google';
+      return { ok: false, code: e.code || 'LOCAL', fatal: !!e.fatal, error: `O modo ${name} falhou nesta página: ` + (e.message || e) };
     }
   }
 
@@ -737,7 +768,7 @@
         c2d.drawImage(bmp, 0, ch.y0, region.w, ch.h, 0, 0, outW, outH);
         const lines = await ocrChunkDeep(canvas, outW, outH);
         if (!Array.isArray(lines)) { bmp.close(); st.revised = true; return; }
-        const groups = cleanGroups(lines, 70);
+        const groups = cleanGroups(lines, 70, ocrOptsFor(srcLang));
         const asBoxes = chunkBoxesToRegion(groups.map(g => ({ ...g, translation: g.original, kind: 'dialogue' })), ch, outW, outH);
         for (const box of asBoxes) {
           if (existing.some(e => overlapRatio(e, box) > 0.15)) continue;          // esse balão já estava traduzido
@@ -890,9 +921,21 @@
     scheduleLayout();
   }, true);
 
+  let localWarned = 0;
+  async function warnLocalStarting() {
+    if (Date.now() - localWarned < 60000) return;
+    const st = await send({ type: 'localStatus', quick: true });
+    if (!st.ok) return;
+    if (st.engines.llama && st.engines.llama.health !== 'ok') {
+      localWarned = Date.now();
+      toast('Ligando o servidor local no seu PC… a primeira página demora um pouco enquanto o modelo carrega.', 7000);
+    }
+  }
+
   function translateAll(silent = false) {
     if (!enabled) return;
     if (isLocal(provider)) prepareTranslator();
+    if (provider === 'local') warnLocalStarting();
     startAuto();
     const imgs = [...document.images].filter(i => isCandidate(i, true));
     for (const img of imgs) {
@@ -1014,10 +1057,12 @@
     const crop = { x: 0, y: top, w: img.naturalWidth, h: Math.max(50, bottom - top), viewW: img.naturalWidth };
 
     attachHost();
+    cmpPanel.classList.remove('wide');
     cmpPanel.style.display = 'block';
     const modes = [
       ['google', 'Google Tradutor (leitor de texto + Google)', true],
       ['nano', 'Gemini Nano (no seu PC)', true],
+      ['local', 'No seu PC (llama.cpp + tradutor escolhido)', true],
       ['gemini', 'Gemini Flash (internet, chave grátis)', hasGemini],
       ['claude', 'Claude (API paga)', hasClaude]
     ];
@@ -1044,12 +1089,135 @@
       const t0 = performance.now();
       let res;
       if (isLocal(id)) {
-        if (id === 'google' || id === 'nano') prepareTranslator();
+        if (id === 'google' || id === 'nano' || id === 'local') prepareTranslator();
         res = await localTranslate({ dataUrl: data.dataUrl, crop, mode: id }, null);
       } else {
         res = await send({ type: 'translateImage', providerOverride: id, dataUrl: data.dataUrl, crop, pageUrl: location.href, context: [] });
       }
       show(id, res, performance.now() - t0);
+    }
+  }
+
+  // ---------- Comparar leitores de texto (OCR) na página que está na tela ----------
+  // Recorta os balões da parte visível da página e cada leitor lê os mesmos
+  // recortes. Se o llama.cpp estiver ligado, traduz o que cada um leu.
+
+  const OCR_ENGINES = [
+    ['llama', 'llama.cpp · no PC'],
+    ['tesseract', 'Tesseract · modo Google'],
+    ['nano', 'Gemini Nano · Chrome']
+  ];
+
+  function centerImage() {
+    const cx = innerWidth / 2, cy = innerHeight / 2;
+    return document.elementsFromPoint(cx, cy).find(el => el instanceof HTMLImageElement && isCandidate(el)) ||
+      [...document.images].find(i => { if (!isCandidate(i)) return false; const r = i.getBoundingClientRect(); return r.top < cy && r.bottom > cy; });
+  }
+
+  let ocrCmpRun = 0;
+
+  async function compareOcr() {
+    const img = centerImage();
+    if (!img) { toast('Deixe uma página do manhwa no meio da tela e tente de novo.'); return; }
+    const run = ++ocrCmpRun;
+    const src = currentSrc(img);
+    const r = img.getBoundingClientRect();
+    const k = img.naturalWidth / r.width;
+    const top = Math.max(0, -r.top) * k, bottom = Math.min(r.height, innerHeight - r.top) * k;
+
+    attachHost();
+    cmpPanel.classList.add('wide');
+    cmpPanel.style.display = 'block';
+    cmpPanel.innerHTML = `<header>🔎 Comparando a leitura do texto <button title="Fechar">✕</button></header>` +
+      `<section class="wait">Recortando os balões da parte que está na tela…</section>`;
+    cmpPanel.querySelector('header button').onclick = () => { ocrCmpRun++; cmpPanel.style.display = 'none'; cmpPanel.classList.remove('wide'); };
+
+    const data = await send({ type: 'fetchImageData', src, pageUrl: location.href });
+    let dataUrl = data.ok ? data.dataUrl : imgToDataUrl(img);
+    if (!dataUrl) { cmpPanel.querySelector('section').textContent = '⚠ ' + errorText(data); return; }
+    const bmp = await createImageBitmap(base64ToBlob(dataUrl));
+    const W = bmp.width, H = Math.max(50, Math.round(bottom - top));
+    const s = Math.min(1, 1000 / W);
+    const canvas = new OffscreenCanvas(Math.round(W * s), Math.round(H * s));
+    const c2d = canvas.getContext('2d');
+    c2d.fillStyle = '#fff';
+    c2d.fillRect(0, 0, canvas.width, canvas.height);
+    c2d.drawImage(bmp, 0, Math.round(top), W, H, 0, 0, canvas.width, canvas.height);
+    bmp.close();
+    const crops = (await bubbleCrops(canvas, canvas.width, canvas.height, 10, LOCAL_CROP)).filter(c => c.text);
+    if (run !== ocrCmpRun) return;
+    if (!crops.length) {
+      cmpPanel.querySelector('section').textContent = 'Não achei balões brancos na parte que está na tela. Role até uma parte com falas e tente de novo.';
+      return;
+    }
+
+    // quais leitores estão prontos
+    const st = await send({ type: 'localStatus', quick: true });
+    const ocrSt = await send({ type: 'ocrStatus' });
+    const ready = {
+      llama: st.ok && st.engines.llama.health === 'ok' ? null : 'desligado (ligue nas configurações, aba Local)',
+      tesseract: ocrSt.ok && ocrSt.installed ? null : 'não instalado (configurações, modo Google)',
+      nano: null
+    };
+    const srcLabel = LANGS[srcLang] ? LANGS[srcLang].label : srcLang;
+
+    cmpPanel.innerHTML = `<header>🔎 Leitura do texto · ${crops.length} ${crops.length === 1 ? 'balão' : 'balões'} · ${esc(srcLabel)} <button title="Fechar">✕</button></header>` +
+      `<section class="sum">${OCR_ENGINES.map(([id, name]) =>
+        `<div data-sum="${id}"><b>${esc(name)}</b> <small>${ready[id] ? esc(ready[id]) : 'lendo…'}</small></div>`).join('')}</section>` +
+      crops.map((c, i) => `<section class="bub" data-i="${i}"><img alt="balão ${i + 1}"><ol>` +
+        OCR_ENGINES.filter(([id]) => !ready[id]).map(([id, name]) =>
+          `<li data-e="${id}"><b>${esc(name.split(' · ')[0])}:</b> <span class="t wait">…</span><span class="tr"></span></li>`).join('') +
+        `</ol></section>`).join('');
+    cmpPanel.querySelector('header button').onclick = () => { ocrCmpRun++; cmpPanel.style.display = 'none'; cmpPanel.classList.remove('wide'); };
+    const urls = crops.map(c => URL.createObjectURL(c.blob));
+    cmpPanel.querySelectorAll('section.bub img').forEach((el, i) => { el.src = urls[i]; });
+    const images = await Promise.all(crops.map(c => blobToDataUrl(c.blob)));
+
+    const results = {};
+    const cell = (i, id) => cmpPanel.querySelector(`section.bub[data-i="${i}"] li[data-e="${id}"]`);
+    const sum = id => cmpPanel.querySelector(`[data-sum="${id}"] small`);
+
+    await Promise.all(OCR_ENGINES.filter(([id]) => !ready[id]).map(async ([id]) => {
+      results[id] = [];
+      let total = 0, fails = 0;
+      for (let i = 0; i < images.length; i++) {
+        if (run !== ocrCmpRun) return;
+        const res = await send({ type: 'ocrCrop', engine: id, image: images[i] });
+        const el = cell(i, id);
+        if (!el) return;
+        const t = el.querySelector('.t');
+        t.classList.remove('wait');
+        if (!res.ok) {
+          fails++;
+          t.textContent = '⚠ ' + (res.error || 'falhou');
+          results[id].push('');
+          if (res.fatal || ['NO_NANO', 'NO_OCR', 'LOCAL_OFF'].includes(res.code)) {
+            for (let j = i + 1; j < images.length; j++) { const e2 = cell(j, id); if (e2) { e2.querySelector('.t').classList.remove('wait'); e2.querySelector('.t').textContent = '—'; } }
+            sum(id).textContent = '⚠ ' + res.error;
+            return;
+          }
+          continue;
+        }
+        total += res.ms;
+        results[id].push(res.text);
+        t.textContent = res.text || '(nada)';
+        t.title = (res.ms / 1000).toFixed(1) + ' s';
+        sum(id).textContent = `${i + 1 - fails} de ${images.length} · ${(total / 1000).toFixed(1)} s no total · ${(total / 1000 / (i + 1 - fails || 1)).toFixed(1)} s por balão`;
+      }
+    }));
+    if (run !== ocrCmpRun) return;
+
+    // traduz o que cada leitor leu (um pedido por leitor), para comparar o resultado final
+    if (ready.llama) return;
+    for (const [id] of OCR_ENGINES) {
+      if (!results[id] || !results[id].some(Boolean)) continue;
+      const tr = await send({ type: 'localTranslateTexts', texts: results[id] });
+      if (run !== ocrCmpRun) return;
+      results[id].forEach((_, i) => {
+        const el = cell(i, id);
+        if (!el) return;
+        el.querySelector('.tr').textContent = tr.ok ? (tr.texts[i] ? '→ ' + tr.texts[i] : '') : (i === 0 ? '⚠ tradução: ' + tr.error : '');
+      });
     }
   }
 
@@ -1200,6 +1368,7 @@
       case 'partialBoxes': onPartialBoxes(msg); break;
       case 'cmdTranslateScreen': translateScreen(); break;
       case 'cmdCompare': compareModes(); break;
+      case 'cmdCompareOcr': compareOcr(); break;
       case 'cmdToggle': toggleAll(); break;
       case 'cmdTranslateAll': translateAll(); break;
       case 'cmdTranslateSrc': translateBySrc(msg.srcUrl); break;

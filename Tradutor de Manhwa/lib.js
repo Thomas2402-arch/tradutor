@@ -24,17 +24,67 @@ var OCR_LIMITS = {
   OVERLAP: 0.15
 };
 
+// ---------- Idiomas ----------
+// code: código BCP 47 usado nas configurações e no tradutor do Chrome
+// name: nome em inglês, usado nos prompts das IAs
+// tess: dados do leitor de texto (Tesseract); gtx: código do Google Tradutor
+// latin: escrita com alfabeto latino (os filtros de lixo do OCR assumem isso)
+var LANGS = {
+  'auto':    { label: 'Detectar sozinho', name: null, tess: 'eng', gtx: 'auto', latin: true },
+  'en':      { label: 'Inglês', name: 'English', tess: 'eng', latin: true },
+  'ko':      { label: 'Coreano', name: 'Korean', tess: 'kor' },
+  'ja':      { label: 'Japonês', name: 'Japanese', tess: 'jpn' },
+  'zh':      { label: 'Chinês simplificado', name: 'Simplified Chinese', tess: 'chi_sim', gtx: 'zh-CN' },
+  'zh-Hant': { label: 'Chinês tradicional', name: 'Traditional Chinese', tess: 'chi_tra', gtx: 'zh-TW' },
+  'es':      { label: 'Espanhol', name: 'Spanish', tess: 'spa', latin: true },
+  'fr':      { label: 'Francês', name: 'French', tess: 'fra', latin: true },
+  'de':      { label: 'Alemão', name: 'German', tess: 'deu', latin: true },
+  'it':      { label: 'Italiano', name: 'Italian', tess: 'ita', latin: true },
+  'pt-BR':   { label: 'Português do Brasil', name: 'Brazilian Portuguese', tess: 'por', mt: 'pt', gtx: 'pt', latin: true },
+  'pt-PT':   { label: 'Português de Portugal', name: 'European Portuguese', tess: 'por', mt: 'pt', gtx: 'pt-PT', latin: true },
+  'ru':      { label: 'Russo', name: 'Russian', tess: 'rus' },
+  'id':      { label: 'Indonésio', name: 'Indonesian', tess: 'ind', latin: true },
+  'vi':      { label: 'Vietnamita', name: 'Vietnamese', tess: 'vie', latin: true },
+  'th':      { label: 'Tailandês', name: 'Thai', tess: 'tha' }
+};
+var SOURCE_LANGS = ['en', 'ko', 'ja', 'zh', 'zh-Hant', 'auto', 'es', 'fr', 'de', 'it', 'pt-BR', 'ru', 'id', 'vi', 'th'];
+var TARGET_LANGS = ['pt-BR', 'pt-PT', 'en', 'es', 'fr', 'de', 'it', 'ja', 'ko', 'zh', 'zh-Hant', 'ru', 'id', 'vi', 'th'];
+
+function langInfo(code) { return LANGS[code] || LANGS.en; }
+function langName(code) { return langInfo(code).name; }                       // null para 'auto'
+function langMt(code) { const l = langInfo(code); return l.mt || code; }      // tradutor do Chrome
+function langGtx(code) { const l = langInfo(code); return l.gtx || code; }    // Google Tradutor
+function langTess(code) { return langInfo(code).tess; }
+function isLatin(code) { return !!langInfo(code).latin; }
+
+// Configuração antiga ("traduzir para" era texto livre) -> código.
+function migrateTargetLang(old) {
+  const t = String(old || '').toLowerCase();
+  if (!t || /portugu[eê]s( do)? brasil|brasileiro|pt-br/.test(t)) return 'pt-BR';
+  if (/portugal|europeu/.test(t)) return 'pt-PT';
+  for (const [code, l] of Object.entries(LANGS)) {
+    if (code !== 'auto' && (t === l.label.toLowerCase() || t === String(l.name).toLowerCase() || t === code.toLowerCase())) return code;
+  }
+  return 'pt-BR';
+}
+
 // Linha parece texto de verdade (e não um pedaço do desenho lido errado)?
-function isTexty(t) {
-  const s = String(t || '').replace(/[\s.,!?…'"“”‘’\-–—]/g, '');
+// latin=false (coreano, japonês, chinês...): basta ter letras da escrita.
+function isTexty(t, latin = true) {
+  const s = String(t || '').replace(/[\s.,!?…'"“”‘’\-–—。、！？「」『』～]/g, '');
+  if (!latin) {
+    const letters = (s.match(/\p{L}/gu) || []).length;
+    return letters >= 1 && letters / Math.max(1, s.length) >= 0.5;
+  }
   const letters = (s.match(/[A-Za-zÀ-ÿ]/g) || []).length;
   return letters >= 2 && letters / Math.max(1, s.length) >= 0.6;
 }
 
 // Junta as linhas lidas pelo leitor de texto em balões (linhas próximas,
 // uma embaixo da outra e alinhadas, são do mesmo balão).
-function groupLines(lines) {
-  const L = lines.filter(l => isTexty(l.text) && l.w > 0 && l.h > 0).sort((a, b) => a.y - b.y || a.x - b.x);
+function groupLines(lines, opts = {}) {
+  const latin = opts.latin !== false;
+  const L = lines.filter(l => isTexty(l.text, latin) && l.w > 0 && l.h > 0).sort((a, b) => a.y - b.y || a.x - b.x);
   const groups = [];
   for (const l of L) {
     let target = null;
@@ -62,7 +112,8 @@ function groupLines(lines) {
     let text = '';
     for (const l of g.lines) {
       const t = l.text.trim();
-      text = !text ? t : (/[-‐]$/.test(text) ? text.replace(/[-‐]$/, '') + t : text + ' ' + t);
+      const sep = opts.joiner != null ? opts.joiner : ' ';   // japonês e chinês não usam espaço
+      text = !text ? t : (/[-‐]$/.test(text) ? text.replace(/[-‐]$/, '') + t : text + sep + t);
     }
     const out = { x: g.x, y: g.y, w: g.w, h: g.h, original: text };
     Object.defineProperty(out, 'lines', { value: g.lines, enumerable: false });
@@ -71,9 +122,14 @@ function groupLines(lines) {
 }
 
 // Linhas -> balões, já sem o lixo.
-function cleanGroups(lines, minConf = 0) {
+// opts: { latin, joiner } — use ocrOptsFor(código do idioma de entrada).
+function cleanGroups(lines, minConf = 0, opts = {}) {
   const ok = lines.filter(l => (l.conf == null || l.conf >= minConf) && plausibleLine(l));
-  return groupLines(ok).filter(g => goodGroup(g, g.lines));
+  return groupLines(ok, opts).filter(g => goodGroup(g, g.lines, opts));
+}
+
+function ocrOptsFor(src) {
+  return { latin: isLatin(src), joiner: (src === 'ja' || src === 'zh' || src === 'zh-Hant' || src === 'th') ? '' : ' ' };
 }
 
 // Acha balões brancos numa imagem em tons de cinza (já reduzida).
@@ -161,7 +217,7 @@ function plausibleLine(l) {
   if (!n || l.w <= 0 || l.h <= 0) return false;
   if (n >= 3 && l.h > 2.6 * (l.w / n)) return false;     // alta demais para o tanto de letras
   if (n >= 2 && l.w > l.h * n * 2.2) return false;       // larga demais (letras muito espaçadas)
-  const sym = (t.match(/[^\p{L}\p{N}\s.,!?'"“”‘’…\-–—:;()~*]/gu) || []).length;
+  const sym = (t.match(/[^\p{L}\p{N}\s.,!?'"“”‘’…\-–—:;()~*。、！？「」『』～・ー]/gu) || []).length;
   return sym / n <= 0.12;
 }
 
@@ -171,9 +227,15 @@ function weirdCase(w) {
 }
 
 // O balão montado parece fala de verdade?
-function goodGroup(g, lines) {
+function goodGroup(g, lines, opts = {}) {
   const text = String(g.original || '');
   const letters = (text.match(/\p{L}/gu) || []).length;
+  if (opts.latin === false) {
+    // coreano, japonês, chinês...: as regras de palavra e vogal abaixo são do inglês
+    if (letters < 1) return false;
+    const sym = (text.match(/[^\p{L}\p{N}\s.,!?…'"“”‘’\-–—:;()~*。、！？「」『』～]/gu) || []).length;
+    return sym / Math.max(1, text.replace(/\s/g, '').length) <= 0.2;
+  }
   if (letters < 2) return false;
   if (letters === 2 && !SHORT_WORDS.test(text.replace(/[^\p{L}]/gu, ''))) return false; // "NO!", "OH?" passam
   const ls = lines || [];
@@ -201,6 +263,12 @@ function mergeLines(primary, secondary) {
   return out;
 }
 
+// Texto todo em maiúsculas (letreiro de quadrinho)? Aí a tradução é desenhada em maiúsculas também.
+function isAllCaps(t) {
+  const s = String(t || '');
+  return /\p{Lu}/u.test(s) && s === s.toUpperCase() && s !== s.toLowerCase();
+}
+
 // "WHERE ARE YOU GOING?" -> "Where are you going?" (o tradutor erra menos)
 function tidyCaps(t) {
   const s = String(t || '').trim();
@@ -209,6 +277,115 @@ function tidyCaps(t) {
     .replace(/(^|[.!?…]\s+|^["'“(]\s*)([a-zà-ÿ])/g, (m, a, b) => a + b.toUpperCase())
     .replace(/\bi\b/g, 'I')
     .replace(/\bi'(m|ll|ve|d)\b/g, "I'$1");
+}
+
+// ---------- Balões recortados: onde está o texto e onde desenhar a tradução ----------
+
+// Dilata uma máscara (1 = fora do balão) em 1 célula, nas 8 direções.
+function growMask(mask, w, h) {
+  const out = mask.slice();
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (mask[y * w + x]) continue;
+    for (let dy = -1; dy <= 1 && !out[y * w + x]; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (nx >= 0 && ny >= 0 && nx < w && ny < h && mask[ny * w + nx]) { out[y * w + x] = 1; break; }
+    }
+  }
+  return out;
+}
+
+// Retângulo das linhas/colunas com pelo menos "min" pixels escuros (letras).
+// rows/cols: contagem de pixels escuros por linha e por coluna. null = sem texto.
+function darkBounds(rows, cols, min = 2) {
+  let y0 = -1, y1 = -1, x0 = -1, x1 = -1;
+  for (let i = 0; i < rows.length; i++) if (rows[i] >= min) { if (y0 < 0) y0 = i; y1 = i; }
+  for (let i = 0; i < cols.length; i++) if (cols[i] >= min) { if (x0 < 0) x0 = i; x1 = i; }
+  if (y0 < 0 || x0 < 0) return null;
+  return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+// Onde desenhar a tradução: em cima do texto original (não do balão inteiro),
+// um pouco mais larga (português costuma ser mais comprido que o original),
+// sem sair do miolo do balão. t = área do texto, b = balão. Sem t: miolo do balão.
+function placeTranslation(t, b) {
+  if (!t || t.w < 4 || t.h < 4) return { x: b.x + b.w * 0.1, y: b.y + b.h * 0.14, w: b.w * 0.8, h: b.h * 0.72 };
+  let ix = b.x + b.w * 0.08, iy = b.y + b.h * 0.08;
+  let ir = b.x + b.w * 0.92, ib = b.y + b.h * 0.92;
+  // o miolo sempre contém o texto todo
+  ix = Math.min(ix, t.x); iy = Math.min(iy, t.y);
+  ir = Math.max(ir, t.x + t.w); ib = Math.max(ib, t.y + t.h);
+  const pad = Math.max(2, Math.min(t.w, t.h) * 0.08);
+  // a área medida é só a das letras (sem o espaço da linha): folga para a fonte caber no mesmo tamanho
+  const h = Math.min(ib - iy, Math.max(t.h + 2 * pad, t.h * 1.2 + 6));
+  const cx = t.x + t.w / 2, cy = t.y + t.h / 2;
+  // Como o fundo da caixa tem a cor do balão, alargar não aparece: dá mais espaço
+  // para a tradução, até onde o balão (oval) é largo na altura do texto.
+  const maxDy = Math.abs(cy - (b.y + b.h / 2)) + h / 2;
+  const oval = Math.sqrt(Math.max(0, 1 - Math.pow(2 * maxDy / b.h, 2)));
+  const roomy = Math.min(b.w * oval * 0.9, t.w * 1.8);
+  const w = Math.min(ir - ix, Math.max(t.w + 2 * pad, t.w * 1.15, roomy));
+  const x = Math.max(ix, Math.min(cx - w / 2, ir - w));
+  const y = Math.max(iy, Math.min(cy - h / 2, ib - h));
+  return { x, y, w, h };
+}
+
+// Acha os balões claros da imagem, recorta cada um (o desenho em volta fica
+// branco) e ampliado, e mede onde está o texto e a cor do fundo do balão.
+// Devolve [{ x, y, w, h, blob, text, bg }] em px do canvas (text = null: balão sem texto).
+// maxSide: lado maior do recorte enviado ao modelo (menor = menos tokens de imagem = mais rápido).
+async function bubbleCrops(canvas, W, H, max = 10, maxSide = 768) {
+  const k = Math.min(1, 240 / W);
+  const sw = Math.max(1, Math.round(W * k)), sh = Math.max(1, Math.round(H * k));
+  const small = new OffscreenCanvas(sw, sh);
+  const sctx = small.getContext('2d', { willReadFrequently: true });
+  sctx.drawImage(canvas, 0, 0, sw, sh);
+  const px = sctx.getImageData(0, 0, sw, sh).data;
+  const gray = new Uint8Array(sw * sh);
+  for (let i = 0; i < gray.length; i++) gray[i] = (px[i * 4] * 0.299 + px[i * 4 + 1] * 0.587 + px[i * 4 + 2] * 0.114) | 0;
+  const { boxes, label } = findBubbles(gray, sw, sh, { white: 200, max: 20 });
+  const out = [];
+  for (const b of boxes) {
+    const m = bubbleOutsideMask(label, sw, sh, b);
+    // perto da borda do balão: fica o contorno, que não é texto
+    const edge = growMask(growMask(m.outside, m.mw, m.mh), m.mw, m.mh);
+    const x = Math.floor(m.x0 / k), y = Math.floor(m.y0 / k);
+    const w = Math.min(W - x, Math.ceil(m.mw / k)), h = Math.min(H - y, Math.ceil(m.mh / k));
+    if (w < 30 || h < 18) continue;
+    const up = Math.min(2, maxSide / w, maxSide / h);
+    const cw = Math.max(1, Math.round(w * up)), ch = Math.max(1, Math.round(h * up));
+    const crop = new OffscreenCanvas(cw, ch);
+    const cctx = crop.getContext('2d', { willReadFrequently: true });
+    cctx.imageSmoothingQuality = 'high';
+    cctx.drawImage(canvas, x, y, w, h, 0, 0, cw, ch);
+    const id = cctx.getImageData(0, 0, cw, ch);
+    const d = id.data;
+    const rows = new Uint32Array(ch), cols = new Uint32Array(cw);
+    let sr = 0, sg = 0, sb = 0, sn = 0;
+    for (let cy = 0; cy < ch; cy++) {
+      const my = Math.min(m.mh - 1, Math.max(0, Math.floor((y + cy / up) * k) - m.y0));
+      for (let cx = 0; cx < cw; cx++) {
+        const mx = Math.min(m.mw - 1, Math.max(0, Math.floor((x + cx / up) * k) - m.x0));
+        const mi = my * m.mw + mx, i = (cy * cw + cx) * 4;
+        if (m.outside[mi]) { d[i] = d[i + 1] = d[i + 2] = 255; continue; }
+        if (edge[mi]) continue;
+        const lum = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+        if (lum < 140) { rows[cy]++; cols[cx]++; }
+        else if (lum > 190) { sr += d[i]; sg += d[i + 1]; sb += d[i + 2]; sn++; }
+      }
+    }
+    cctx.putImageData(id, 0, 0);
+    // ignora sujeira: linha/coluna precisa de alguns pixels escuros
+    const t = darkBounds(rows, cols, Math.max(2, Math.round(up * 1.5)));
+    out.push({
+      x, y, w, h,
+      blob: await crop.convertToBlob({ type: 'image/png' }),
+      text: t ? { x: x + t.x / up, y: y + t.y / up, w: t.w / up, h: t.h / up } : null,
+      bg: sn ? `rgb(${Math.round(sr / sn)}, ${Math.round(sg / sn)}, ${Math.round(sb / sn)})` : null
+    });
+  }
+  // ordem de leitura: de cima para baixo
+  out.sort((a, b) => a.y - b.y || a.x - b.x);
+  return out.slice(0, max);
 }
 
 // Divide uma região (largura x altura, em px da imagem original) em fatias
@@ -271,7 +448,9 @@ function chunkBoxesToRegion(bubbles, chunk, sentW, sentH) {
       h: h / chunk.scale,
       text,
       original: String(b.original ?? '').trim(),
-      kind: ['dialogue', 'narration', 'sfx', 'sign'].includes(b.kind) ? b.kind : 'dialogue'
+      kind: ['dialogue', 'narration', 'sfx', 'sign'].includes(b.kind) ? b.kind : 'dialogue',
+      bg: typeof b.bg === 'string' ? b.bg : undefined,    // cor do balão (desenho justo no texto)
+      caps: b.caps ? true : undefined                     // desenhar em maiúsculas, como o original
     });
   }
   return out;
@@ -319,7 +498,9 @@ function toFractions(boxes, regionW, regionH) {
     h: b.h / regionH,
     text: b.text,
     original: b.original,
-    kind: b.kind
+    kind: b.kind,
+    bg: b.bg,
+    caps: b.caps
   }));
 }
 
@@ -371,5 +552,5 @@ function geminiToBubbles(obj, w, h) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { LIMITS: DEFAULT_LIMITS, DEFAULT_LIMITS, GEMINI_LIMITS, OCR_LIMITS, isTexty, groupLines, tidyCaps, findBubbles, bubbleOutsideMask, mergeLines, looksLikeSpeech, plausibleLine, goodGroup, cleanGroups, weirdCase, parseJsonLoose, geminiToBubbles, planChunks, chunkBoxesToRegion, dedupeAcrossChunks, overlapRatio, toFractions, hashString };
+  module.exports = { isAllCaps, growMask, darkBounds, placeTranslation, LANGS, SOURCE_LANGS, TARGET_LANGS, langInfo, langName, langMt, langGtx, langTess, isLatin, migrateTargetLang, ocrOptsFor, LIMITS: DEFAULT_LIMITS, DEFAULT_LIMITS, GEMINI_LIMITS, OCR_LIMITS, isTexty, groupLines, tidyCaps, findBubbles, bubbleOutsideMask, mergeLines, looksLikeSpeech, plausibleLine, goodGroup, cleanGroups, weirdCase, parseJsonLoose, geminiToBubbles, planChunks, chunkBoxesToRegion, dedupeAcrossChunks, overlapRatio, toFractions, hashString };
 }

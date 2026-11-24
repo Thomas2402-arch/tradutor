@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tradutor de Manhwa",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Traduz os balões de manhwa, mangá e manhua para português direto na página, usando Google Tradutor, Gemini ou Claude.",
   "permissions": [
     "storage",
@@ -10,7 +10,8 @@
     "scripting",
     "declarativeNetRequestWithHostAccess",
     "offscreen",
-    "downloads"
+    "downloads",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "<all_urls>"
