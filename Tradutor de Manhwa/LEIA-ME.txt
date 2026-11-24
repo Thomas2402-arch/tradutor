@@ -32,6 +32,34 @@ MODO GEMINI NANO (grátis, sem limite, roda no PC)
 - O Chrome baixa alguns GB e precisa de uns 22 GB livres no disco.
 - Para comparar os tradutores: ícone da extensão > "Comparar tradutores nesta tela".
 
+IDIOMAS
+-------
+- Nas configurações, passo 3: escolha o idioma do texto nas imagens
+  (inglês, coreano, japonês, chinês...) e o idioma da tradução.
+- No modo Google, o leitor de texto baixa os dados do idioma escolhido.
+  Para coreano, japonês e chinês ele erra bastante: prefira Gemini,
+  Claude ou o servidor local.
+
+SERVIDOR LOCAL (llama.cpp, roda no PC, só Windows)
+--------------------------------------------------
+- Nas configurações, abra a aba Local e desça até "Servidor local".
+- Clique em "Baixar o instalador do ajudante", clique em "Manter" no
+  aviso do Chrome e dê dois cliques no arquivo instalar-servidor-tradutor.bat.
+  Se o Windows pedir para instalar o Visual C++, aceite.
+- Volte às configurações e clique em "Verificar de novo".
+- Escolha a placa de vídeo e o modelo e clique em "Baixar e instalar"
+  (de 2 a 6 GB; se cair a internet, continua de onde parou). Se o Vulkan
+  do PC for antigo, a página avisa: use "Sem placa de vídeo".
+- Clique em "Ligar" e depois em "Testar". O status aparece também no
+  ícone da extensão.
+- Para traduzir com ele: aba Local, "Servidor local". Escolha quem traduz
+  (o próprio llama.cpp, Gemini, Claude ou Google). Quem lê é o llama.cpp.
+  Ao traduzir, a extensão liga sozinha os servidores desligados.
+- Para comparar leitores: ícone da extensão > "Comparar leitura de texto
+  nesta tela" (llama.cpp, leitor de texto e Gemini Nano nos mesmos balões).
+- A tradução é desenhada só em cima do texto original, com a cor do balão.
+- Tudo fica em %LOCALAPPDATA%\TradutorManhwa. "Desinstalar tudo" apaga.
+
 CHAVE DO CLAUDE (paga, opcional)
 --------------------------------
 - Entre em console.anthropic.com e crie uma conta.

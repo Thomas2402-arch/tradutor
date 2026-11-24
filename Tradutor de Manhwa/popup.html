@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <link rel="stylesheet" href="ui.css">
   <style>
-    body { width: 300px; padding: 14px; }
+    body { width: 330px; padding: 14px; }
     h1 { font-size: 16px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
     h1 img { width: 22px; height: 22px; }
     button { width: 100%; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
@@ -17,6 +17,29 @@
     .power.off { background: #52525b; border-color: #52525b; color: #fff; }
     .power.off:hover { background: #3f3f46; }
     #offMsg { margin: -4px 0 10px; text-align: center; }
+    .mode { border: 1px solid #e4e4e7; border-radius: 10px; padding: 9px 11px; margin-bottom: 12px; font-size: 13px; }
+    .mode-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+    .mode-head small { color: #888; font-size: 11px; margin-left: 4px; }
+    #modeDetail { white-space: pre-line; margin-top: 3px; }
+    #servers { border-top: 1px solid rgba(127,127,127,.25); margin-top: 8px; padding-top: 6px; }
+    .srv-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: #888; margin-bottom: 4px; }
+    .srv { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+    .srv-main { flex: 1; min-width: 0; }
+    .srv-head { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+    .srv-head .role { font-size: 10px; font-weight: 600; background: rgba(29,78,216,.12); color: #1d4ed8; padding: 1px 6px; border-radius: 999px; }
+    .srv-head .state { color: #666; font-size: 12px; }
+    .srv-detail { color: #888; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .srv-note { color: #666; font-size: 12px; margin-top: 4px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #a1a1aa; flex: none; }
+    .dot.on { background: #16a34a; }
+    .dot.busy { background: #f59e0b; }
+    .dot.err { background: #dc2626; }
+    button.mini { width: auto; margin: 0; padding: 4px 9px; font-size: 12px; flex: none; }
+    @media (prefers-color-scheme: dark) {
+      .mode { border-color: #3f3f46; }
+      .srv-head .role { background: rgba(96,165,250,.18); color: #93c5fd; }
+      .srv-head .state, .srv-note { color: #a1a1aa; }
+    }
   </style>
 </head>
 <body>
@@ -24,6 +47,12 @@
 
   <button id="power" class="power" type="button"></button>
   <div id="offMsg" class="muted" hidden>Desligado: a extensão não faz nada em nenhum site. Ligue quando for ler.</div>
+
+  <div class="mode">
+    <div class="mode-head"><span><b id="modeName">…</b><small id="modeTab"></small></span><a href="#" id="modeChange">trocar</a></div>
+    <div id="modeDetail" class="muted"></div>
+    <div id="servers" hidden></div>
+  </div>
 
   <div id="nokey" class="warn" hidden>
     Falta colocar sua chave. <a href="#" id="openOpt2">Configurar agora</a>
@@ -36,6 +65,7 @@
     <button id="toggle">Mostrar original / tradução <kbd>Alt+O</kbd></button>
     <label class="switch"><input type="checkbox" id="auto"> Traduzir sozinho sempre neste site</label>
     <button id="compare">🔬 Comparar tradutores nesta tela</button>
+    <button id="compareOcr">🔎 Comparar leitura de texto nesta tela</button>
     <button id="clear" class="ghost">Apagar as traduções desta página</button>
   </div>
 
@@ -45,6 +75,7 @@
     <a href="#" id="openOpt">Configurações</a>
   </div>
 
+  <script src="lib.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -1,17 +1,20 @@
-importScripts('lib.js');
+importScripts('lib.js', 'local-server.js');
 
 const DEFAULTS = {
-  provider: 'gemini',            // 'gemini' (grátis), 'google' (grátis e sem limite) ou 'claude' (pago)
+  provider: 'gemini',            // 'gemini' (grátis), 'google' (grátis e sem limite), 'claude' (pago), 'nano' ou 'local' (no PC)
   geminiKey: '',
   geminiModel: 'gemini-3.6-flash',
   apiKey: '',                    // chave do Claude
   model: 'claude-haiku-5-5',     // modelo do Claude
   customModel: '',
-  targetLang: 'português do Brasil',
+  srcLang: 'en',                 // idioma do texto nas imagens (código de LANGS, lib.js)
+  dstLang: null,                 // idioma da tradução; null = ainda não migrou do campo antigo
+  targetLang: 'português do Brasil', // campo antigo (texto livre), só para migrar
   useCache: true,
   useMemory: true,      // memória da série (nomes e termos sempre traduzidos igual)
   reviewPass: true,     // modo Google: revisar depois de traduzir
   prefetchNext: true,   // já traduzir o próximo capítulo
+  localTranslator: 'llama',      // modo 'local': quem traduz (llama, gemini, claude ou google)
   autoSites: []
 };
 
@@ -22,10 +25,17 @@ const PRICES = {
   'claude-opus-5-5': [4, 20]
 };
 
-const FATAL = new Set(['NO_KEY', 'AUTH', 'CREDIT', 'MODEL', 'QUOTA', 'NO_OCR', 'NO_NANO']);
+const FATAL = new Set(['NO_KEY', 'AUTH', 'CREDIT', 'MODEL', 'QUOTA', 'NO_OCR', 'NO_NANO',
+  'NO_HOST', 'NOT_INSTALLED', 'NO_VCRUNTIME', 'START_FAILED', 'VULKAN_OLD', 'LOCAL_TIMEOUT', 'LOCAL_OFF', 'LOCAL_AUTH']);
 
+// targetLang/sourceLang saem como nome em inglês, que é o que vai nos prompts.
 async function getSettings() {
-  return chrome.storage.local.get(DEFAULTS);
+  const s = await chrome.storage.local.get(DEFAULTS);
+  if (!s.dstLang) s.dstLang = migrateTargetLang(s.targetLang);
+  if (!LANGS[s.srcLang]) s.srcLang = 'en';
+  s.targetLang = langName(s.dstLang);
+  s.sourceLang = langName(s.srcLang);   // null = detectar sozinho
+  return s;
 }
 
 function modelOf(s) {
@@ -35,7 +45,7 @@ function modelOf(s) {
 }
 
 function keyOf(s) {
-  if (s.provider === 'google' || s.provider === 'nano') return 'sem-chave';
+  if (s.provider === 'google' || s.provider === 'nano' || s.provider === 'local') return 'sem-chave';
   return s.provider === 'gemini' ? s.geminiKey : s.apiKey;
 }
 
@@ -74,19 +84,21 @@ const HANDLERS = {
   ocrStatus,
   nanoRead: async (msg) => {
     await ensureOffscreen();
-    const r = await chrome.runtime.sendMessage({ target: 'offscreen', kind: 'nano', image: msg.image });
+    const r = await chrome.runtime.sendMessage({ target: 'offscreen', kind: 'nano', image: msg.image, src: (await getSettings()).srcLang });
     if (!r || !r.ok) throw err((r && r.code) || 'NANO', (r && r.error) || 'O Gemini Nano não respondeu.');
     return { text: r.text };
   },
   downloadOcr,
-  openOptions: async () => { await chrome.runtime.openOptionsPage(); return {}; }
+  openOptions: async () => { await chrome.runtime.openOptionsPage(); return {}; },
+  ...LOCAL_HANDLERS
 };
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const handler = HANDLERS[msg && msg.type];
   if (!handler) return false;
   const stop = keepAlive();
-  handler(msg, sender)
+  // Promise.resolve().then: erro lançado direto (sem await) também vira resposta de erro
+  Promise.resolve().then(() => handler(msg, sender))
     .then(r => sendResponse({ ok: true, ...r }))
     .catch(e => {
       console.warn('[Tradutor de Manhwa]', e);
@@ -167,7 +179,7 @@ async function translateImage(msg, sender) {
   const model = modelOf(settings);
 
   const cacheable = !msg.dataUrl && /^https?:/i.test(msg.src || '');
-  const cacheKey = cacheable ? 'c:' + hashString(settings.provider + '|' + model + '|' + settings.targetLang + '|' + msg.src) : null;
+  const cacheKey = cacheable ? 'c:' + hashString(settings.provider + '|' + model + '|' + settings.srcLang + '>' + settings.targetLang + '|' + msg.src) : null;
   if (cacheKey && settings.useCache) {
     const hit = (await chrome.storage.local.get(cacheKey))[cacheKey];
     if (hit) return { boxes: hit.boxes, cached: true };
@@ -320,8 +332,8 @@ async function blobToBase64(blob) {
 
 // ---------- Claude ----------
 
-function systemPrompt(lang) {
-  return `You translate comics (manhwa, manga, manhua, webtoons) for a reader who speaks ${lang}.
+function systemPrompt(lang, src) {
+  return `You translate comics (manhwa, manga, manhua, webtoons) for a reader who speaks ${lang}.${src ? ` The text in the images is written in ${src}.` : ''}
 
 You receive one image: a comic page or a slice of a long vertical webtoon strip. Find every piece of readable text that matters for the story: speech bubbles, thought bubbles, narration boxes, captions, relevant signs or text inside the scene, and sound effects.
 
@@ -386,7 +398,7 @@ async function callClaude(b64, w, h, settings, model, context) {
   const body = {
     model,
     max_tokens: 4096,
-    system: systemPrompt(settings.targetLang),
+    system: systemPrompt(settings.targetLang, settings.sourceLang),
     tools: [TOOL],
     tool_choice: { type: 'tool', name: TOOL.name },
     messages: [{
@@ -452,8 +464,8 @@ async function postMessages(body, apiKey, { retries = 3 } = {}) {
 
 // ---------- Gemini (Google) ----------
 
-function geminiPrompt(lang) {
-  return systemPrompt(lang)
+function geminiPrompt(lang, src) {
+  return systemPrompt(lang, src)
     .replace(/- x, y, w, h:[^\n]*\n/, '- box_2d: [ymin, xmin, ymax, xmax] of the bubble or box, normalized to 0-1000. Cover the whole inside of the bubble or box where the text sits, so the translation can be drawn over the original text and hide it.\n')
     .replace('- No text in the image: call the tool with an empty list.\n', '')
     .replace('Always answer by calling the tool enviar_traducoes.',
@@ -477,7 +489,7 @@ async function callGemini(b64, w, h, settings, model, context) {
   text += `Translate the text in this image into ${settings.targetLang}. Answer only with the JSON.`;
 
   const body = {
-    systemInstruction: { parts: [{ text: geminiPrompt(settings.targetLang) }] },
+    systemInstruction: { parts: [{ text: geminiPrompt(settings.targetLang, settings.sourceLang) }] },
     contents: [{
       role: 'user',
       parts: [
@@ -621,7 +633,7 @@ async function fetchImageData(msg) {
 async function cacheGet(msg) {
   const settings = await getSettings();
   if (!settings.useCache || !msg.key) return { boxes: null };
-  const k = 'c:' + hashString('google|' + settings.targetLang + '|' + msg.key);
+  const k = 'c:' + hashString('google|' + settings.srcLang + '>' + settings.targetLang + '|' + msg.key);
   const hit = (await chrome.storage.local.get(k))[k];
   return { boxes: hit ? hit.boxes : null, revised: !!(hit && hit.revised) };
 }
@@ -629,23 +641,33 @@ async function cacheGet(msg) {
 async function cachePut(msg) {
   const settings = await getSettings();
   if (!settings.useCache || !msg.key) return {};
-  const k = 'c:' + hashString('google|' + settings.targetLang + '|' + msg.key);
+  const k = 'c:' + hashString('google|' + settings.srcLang + '>' + settings.targetLang + '|' + msg.key);
   await chrome.storage.local.set({ [k]: { boxes: msg.boxes, revised: !!msg.revised, t: Date.now() } });
   return {};
 }
 
 // Leitor de texto (Tesseract) — roda num documento escondido da extensão.
-const OCR_FILES = [
+const OCR_CORE = [
   ['tesseract.min.js', 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'],
   ['worker.min.js', 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js'],
   ['tesseract-core-simd-lstm.wasm.js', 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/tesseract-core-simd-lstm.wasm.js'],
-  ['tesseract-core-lstm.wasm.js', 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/tesseract-core-lstm.wasm.js'],
-  ['eng.traineddata.gz', 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int/eng.traineddata.gz']
+  ['tesseract-core-lstm.wasm.js', 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1/tesseract-core-lstm.wasm.js']
 ];
 
-async function ocrStatus() {
+// Arquivos do leitor de texto para o idioma de entrada (eng, kor, jpn...).
+function ocrFiles(tess) {
+  return [...OCR_CORE, [tess + '.traineddata.gz', `https://cdn.jsdelivr.net/npm/@tesseract.js-data/${tess}@1.0.0/4.0.0_best_int/${tess}.traineddata.gz`]];
+}
+
+async function ocrLang(msg) {
+  if (msg && msg.lang && /^[a-z_]{3,8}$/.test(msg.lang)) return msg.lang;
+  return langTess((await getSettings()).srcLang);
+}
+
+async function ocrStatus(msg) {
+  const lang = await ocrLang(msg);
   const missing = [];
-  for (const [name] of OCR_FILES) {
+  for (const [name] of ocrFiles(lang)) {
     try {
       const r = await fetch(chrome.runtime.getURL('tesseract/' + name), { method: 'HEAD' });
       if (!r.ok) missing.push(name);
@@ -653,14 +675,15 @@ async function ocrStatus() {
       missing.push(name);
     }
   }
-  return { installed: missing.length === 0, missing };
+  return { installed: missing.length === 0, missing, lang };
 }
 
-async function downloadOcr() {
-  for (const [name, url] of OCR_FILES) {
+async function downloadOcr(msg) {
+  const files = ocrFiles(await ocrLang(msg));
+  for (const [name, url] of files) {
     await chrome.downloads.download({ url, filename: 'tesseract/' + name, conflictAction: 'overwrite', saveAs: false });
   }
-  return { count: OCR_FILES.length };
+  return { count: files.length };
 }
 
 let creatingOffscreen = null;
@@ -678,43 +701,46 @@ async function ensureOffscreen() {
 }
 
 async function ocr(msg) {
-  const st = await ocrStatus();
+  const lang = await ocrLang(msg);
+  const st = await ocrStatus({ lang });
   if (!st.installed) {
     throw err('NO_OCR', 'Falta instalar o leitor de texto do modo Google. Abra as configurações da extensão e siga o passo 2.');
   }
   await ensureOffscreen();
-  const r = await chrome.runtime.sendMessage({ target: 'offscreen', image: msg.image, mode: msg.mode || 'auto' });
+  const r = await chrome.runtime.sendMessage({ target: 'offscreen', image: msg.image, mode: msg.mode || 'auto', lang });
   if (!r || !r.ok) throw err((r && r.code) || 'OCR', 'O leitor de texto falhou: ' + ((r && r.error) || 'sem resposta'));
   return { lines: r.lines };
 }
 
 // Google Tradutor pela internet (usado quando o tradutor embutido do Chrome não está disponível).
 async function googleTranslate(msg) {
-  const to = msg.to || 'pt';
+  const s = await getSettings();
+  const from = msg.from || langGtx(s.srcLang);
+  const to = msg.to || langGtx(s.dstLang);
   const out = new Array(msg.texts.length);
   let next = 0;
   async function worker() {
     while (next < msg.texts.length) {
       const i = next++;
-      out[i] = await googleOne(msg.texts[i], to);
+      out[i] = await googleOne(msg.texts[i], from, to);
     }
   }
   await Promise.all([worker(), worker(), worker()]);
   return { texts: out };
 }
 
-async function googleOne(text, to, attempt = 0) {
+async function googleOne(text, from, to, attempt = 0) {
   if (!text || !text.trim()) return '';
-  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' +
+  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=' + encodeURIComponent(from || 'auto') + '&tl=' +
     encodeURIComponent(to) + '&dt=t&q=' + encodeURIComponent(text);
   let res;
   try {
     res = await fetch(url);
   } catch (_) {
-    if (attempt < 2) { await sleep(1500 * (attempt + 1)); return googleOne(text, to, attempt + 1); }
+    if (attempt < 2) { await sleep(1500 * (attempt + 1)); return googleOne(text, from, to, attempt + 1); }
     throw err('NETWORK', 'Sem conexão com o Google Tradutor.');
   }
-  if (res.status === 429 && attempt < 3) { await sleep(5000 * (attempt + 1)); return googleOne(text, to, attempt + 1); }
+  if (res.status === 429 && attempt < 3) { await sleep(5000 * (attempt + 1)); return googleOne(text, from, to, attempt + 1); }
   if (!res.ok) throw err('API', `O Google Tradutor recusou (erro ${res.status}). Tente de novo daqui a pouco.`);
   const data = await res.json();
   return (data[0] || []).map(seg => seg[0] || '').join('').trim();
